@@ -35,32 +35,79 @@ export function ThoughtStream({ project, filePath }: ThoughtStreamProps) {
   const [thoughts, setThoughts] = React.useState<Thought[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [isStreaming, setIsStreaming] = React.useState(false)
+  const eventSourceRef = React.useRef<EventSource | null>(null)
+  const scrollRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
+    // Cleanup previous stream
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+    }
+
     if (!project || !filePath) {
       setThoughts([])
+      setIsStreaming(false)
       return
     }
 
     setLoading(true)
     setError(null)
+    setThoughts([])
+    setIsStreaming(true)
     
-    fetch(`http://localhost:3001/api/projects/${encodeURIComponent(project)}/thoughts?path=${encodeURIComponent(filePath)}`)
-      .then(async (r) => {
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}))
-          throw new Error(err.error || 'Failed to get thoughts')
+    // Create SSE connection
+    const url = `http://localhost:3001/api/projects/${encodeURIComponent(project)}/thoughts/stream?path=${encodeURIComponent(filePath)}`
+    const eventSource = new EventSource(url)
+    eventSourceRef.current = eventSource
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        
+        if (data.thought) {
+          setThoughts(prev => [...prev, data.thought])
+          setLoading(false)
+          
+          // Auto-scroll to bottom when new thought arrives
+          setTimeout(() => {
+            if (scrollRef.current) {
+              scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+            }
+          }, 100)
         }
-        return r.json()
-      })
-      .then((data: { thoughts: Thought[] }) => {
-        setThoughts(data.thoughts || [])
-      })
-      .catch((e: Error) => {
-        setError(e.message)
-        setThoughts([])
-      })
-      .finally(() => setLoading(false))
+        
+        if (data.done) {
+          setIsStreaming(false)
+          eventSource.close()
+        }
+        
+        if (data.error) {
+          setError(data.error)
+          setIsStreaming(false)
+          eventSource.close()
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE data:', e)
+      }
+    }
+    
+    eventSource.onerror = (err) => {
+      console.error('SSE error:', err)
+      setError('Connection to thought stream lost')
+      setLoading(false)
+      setIsStreaming(false)
+      eventSource.close()
+    }
+    
+    // Cleanup on unmount or when deps change
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+        eventSourceRef.current = null
+      }
+    }
   }, [project, filePath])
 
   const getThoughtIcon = (type: Thought['type']) => {
@@ -80,9 +127,15 @@ export function ThoughtStream({ project, filePath }: ThoughtStreamProps) {
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <Brain className="h-4 w-4" />
           Thought Stream
+          {isStreaming && (
+            <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Streaming...
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex-1 overflow-y-auto space-y-3 pb-3">
+      <CardContent ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 pb-3">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
             <Loader2 className="h-8 w-8 mb-2 animate-spin" />

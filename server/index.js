@@ -119,8 +119,8 @@ app.get('/api/projects/:project/file', async (req, res) => {
   }
 })
 
-// GET /api/projects/:project/thoughts?path=relative/path -> LLM thoughts about file
-app.get('/api/projects/:project/thoughts', async (req, res) => {
+// GET /api/projects/:project/thoughts/stream?path=relative/path -> SSE stream of thoughts
+app.get('/api/projects/:project/thoughts/stream', async (req, res) => {
   try {
     const { project } = req.params
     const relPath = req.query.path
@@ -142,70 +142,115 @@ app.get('/api/projects/:project/thoughts', async (req, res) => {
       return res.status(404).json({ error: 'File not found' })
     }
 
-    // Construct the prompt for Warp SDK
-    const prompt = `Read the document at ${fullPath} and generate interesting insights, thoughts, or questions about it. Return your response as a JSON array where each element is an object with these fields: "type" (one of: "analysis", "suggestion", "question"), "content" (the thought text). Example format: [{"type": "analysis", "content": "The document shows..."}, {"type": "suggestion", "content": "Consider..."}, {"type": "question", "content": "How does..."}]`
-    
-    // Call Warp SDK
-    console.log('Calling Warp SDK for thoughts on:', relPath)
-    const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
-    
-    try {
-      const { stdout, stderr } = await execPromise(command, {
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large responses
-      })
-      
-      if (stderr) {
-        console.warn('Warp SDK stderr:', stderr)
-      }
+    // Set up SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': 'http://localhost:3000'
+    })
 
-      // Try to parse the response as JSON
-      let thoughts = []
+    let thoughtHistory = []
+    let thoughtId = 1
+    let iteration = 0
+    const MAX_ITERATIONS = 10 // Prevent infinite loops
+    
+    // Function to generate thoughts
+    async function generateThoughts() {
+      if (iteration >= MAX_ITERATIONS) {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`)
+        res.end()
+        return
+      }
+      
+      iteration++
+      
+      let prompt
+      if (thoughtHistory.length === 0) {
+        // Initial prompt
+        prompt = `Read the document at ${fullPath} and generate exactly 3 thoughts about it: one analysis, one suggestion, and one question. Return as a JSON array with objects having "type" and "content" fields. Example: [{"type": "analysis", "content": "..."}, {"type": "suggestion", "content": "..."}, {"type": "question", "content": "..."}]`
+      } else {
+        // Recursive prompt with history
+        const recentThoughts = thoughtHistory.slice(-3).map(t => `${t.type}: ${t.content}`).join('\n')
+        prompt = `Given these previous thoughts about the document at ${fullPath}:\n${recentThoughts}\n\nBuild on these insights to generate 3 NEW deeper thoughts (one of each type: analysis, suggestion, question). Go deeper, explore different angles, or follow up on the previous thoughts. Return as a JSON array with "type" and "content" fields.`
+      }
+      
+      console.log(`Thought stream iteration ${iteration} for:`, relPath)
+      const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
+      
       try {
-        // The response might have extra text, try to extract JSON array
-        const jsonMatch = stdout.match(/\[.*\]/s)
-        if (jsonMatch) {
-          thoughts = JSON.parse(jsonMatch[0])
-        } else {
-          // Fallback: create a single thought from the response
+        const { stdout, stderr } = await execPromise(command, {
+          maxBuffer: 1024 * 1024 * 10
+        })
+        
+        if (stderr) {
+          console.warn('Warp SDK stderr:', stderr)
+        }
+
+        let thoughts = []
+        try {
+          const jsonMatch = stdout.match(/\[.*\]/s)
+          if (jsonMatch) {
+            thoughts = JSON.parse(jsonMatch[0])
+          } else {
+            thoughts = [{
+              type: 'analysis',
+              content: stdout.trim() || 'Continuing analysis...'
+            }]
+          }
+        } catch (parseErr) {
+          console.error('Failed to parse Warp SDK response:', parseErr)
           thoughts = [{
             type: 'analysis',
-            content: stdout.trim() || 'No insights generated'
+            content: stdout.trim() || 'Continuing analysis...'
           }]
         }
-      } catch (parseErr) {
-        console.error('Failed to parse Warp SDK response as JSON:', parseErr)
-        // Return the raw text as a single thought
-        thoughts = [{
-          type: 'analysis',
-          content: stdout.trim() || 'No insights generated'
-        }]
-      }
-      
-      // Add timestamps
-      const thoughtsWithTime = thoughts.map((thought, idx) => ({
-        ...thought,
-        id: idx + 1,
-        timestamp: new Date().toISOString()
-      }))
-      
-      res.json({ thoughts: thoughtsWithTime })
-    } catch (cmdErr) {
-      console.error('Error executing Warp SDK command:', cmdErr)
-      // Return fallback thoughts if Warp SDK fails
-      res.json({ 
-        thoughts: [
-          {
-            id: 1,
-            type: 'analysis',
-            content: 'Unable to generate AI insights at this time. Warp SDK might not be available.',
-            timestamp: new Date().toISOString()
+        
+        // Send each thought as an SSE event
+        for (const thought of thoughts) {
+          const thoughtWithMeta = {
+            ...thought,
+            id: thoughtId++,
+            timestamp: new Date().toISOString(),
+            iteration
           }
-        ]
-      })
+          
+          thoughtHistory.push(thought)
+          res.write(`data: ${JSON.stringify({ thought: thoughtWithMeta })}\n\n`)
+          
+          // Small delay between thoughts for visual effect
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+        
+        // Wait before next iteration
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        
+        // Recursively generate more thoughts
+        await generateThoughts()
+        
+      } catch (cmdErr) {
+        console.error('Error in thought generation iteration:', cmdErr)
+        res.write(`data: ${JSON.stringify({ error: 'Generation stopped', done: true })}\n\n`)
+        res.end()
+      }
     }
+    
+    // Start the thought generation loop
+    generateThoughts().catch(err => {
+      console.error('Thought stream error:', err)
+      res.write(`data: ${JSON.stringify({ error: err.message, done: true })}\n\n`)
+      res.end()
+    })
+    
+    // Handle client disconnect
+    req.on('close', () => {
+      console.log('Client disconnected from thought stream')
+      res.end()
+    })
+    
   } catch (err) {
-    console.error('Error getting thoughts:', err)
-    res.status(500).json({ error: 'Failed to get thoughts' })
+    console.error('Error starting thought stream:', err)
+    res.status(500).json({ error: 'Failed to start thought stream' })
   }
 })
 
