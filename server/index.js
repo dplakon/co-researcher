@@ -176,7 +176,7 @@ app.get('/api/projects/:project/thoughts/stream', async (req, res) => {
       }
       
       console.log(`Thought stream iteration ${iteration} for:`, relPath)
-      const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
+      const command = `warp-preview agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
       
       try {
         const { stdout, stderr } = await execPromise(command, {
@@ -282,7 +282,7 @@ app.get('/api/projects/:project/notes', async (req, res) => {
     
     // Call Warp SDK
     console.log('Calling Warp SDK for note cards on:', relPath)
-    const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
+    const command = `warp-preview agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
     
     try {
       const { stdout, stderr } = await execPromise(command, {

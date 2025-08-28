@@ -26,4 +26,3 @@ export function ProjectPicker({ projects, value, onChange }: ProjectPickerProps)
     </div>
   )
 }
-
