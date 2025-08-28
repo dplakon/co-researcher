@@ -42,7 +42,7 @@ app.get('/api/projects', async (_req, res) => {
 })
 
 // Build file tree recursively
-async function buildTree(dir) {
+async function buildTree(dir, base) {
   const result = []
   const entries = await fs.promises.readdir(dir, { withFileTypes: true })
   // Sort: directories first then files, alphabetical
@@ -54,11 +54,12 @@ async function buildTree(dir) {
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name)
+    const relPath = base ? path.join(base, entry.name) : entry.name
     if (entry.isDirectory()) {
-      const children = await buildTree(fullPath)
-      result.push({ name: entry.name, type: 'dir', children })
+      const children = await buildTree(fullPath, relPath)
+      result.push({ name: entry.name, type: 'dir', path: relPath, children })
     } else if (entry.isFile()) {
-      result.push({ name: entry.name, type: 'file' })
+      result.push({ name: entry.name, type: 'file', path: relPath })
     }
     // ignore symlinks and others for now
   }
@@ -74,11 +75,43 @@ app.get('/api/projects/:project/tree', async (req, res) => {
     const exists = fs.existsSync(root)
     if (!exists) return res.status(404).json({ error: 'Project not found' })
 
-    const tree = await buildTree(root)
-    res.json({ name: project, type: 'dir', children: tree })
+    const tree = await buildTree(root, '')
+    res.json({ name: project, type: 'dir', path: '', children: tree })
   } catch (err) {
     console.error('Error building file tree', err)
     res.status(500).json({ error: 'Failed to build file tree' })
+  }
+})
+
+// GET /api/projects/:project/file?path=relative/path -> file content (text)
+app.get('/api/projects/:project/file', async (req, res) => {
+  try {
+    const { project } = req.params
+    const relPath = req.query.path
+    if (typeof relPath !== 'string' || !relPath) {
+      return res.status(400).json({ error: 'Missing or invalid path' })
+    }
+    const root = resolveProjectRoot(project)
+    if (!root) return res.status(400).json({ error: 'Invalid project' })
+
+    const fullPath = path.join(root, relPath)
+    const safeRel = path.relative(root, fullPath)
+    if (safeRel.startsWith('..') || path.isAbsolute(safeRel)) {
+      return res.status(400).json({ error: 'Invalid path' })
+    }
+    const stat = await fs.promises.stat(fullPath).catch(() => null)
+    if (!stat || !stat.isFile()) {
+      return res.status(404).json({ error: 'File not found' })
+    }
+    // Read as UTF-8 text, with a soft size guard (2MB)
+    if (stat.size > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: 'File too large to preview' })
+    }
+    const content = await fs.promises.readFile(fullPath, 'utf8')
+    res.json({ path: relPath, content })
+  } catch (err) {
+    console.error('Error reading file', err)
+    res.status(500).json({ error: 'Failed to read file' })
   }
 })
 
