@@ -2,6 +2,10 @@ const express = require('express')
 const cors = require('cors')
 const fs = require('fs')
 const path = require('path')
+const { exec } = require('child_process')
+const util = require('util')
+
+const execPromise = util.promisify(exec)
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -112,6 +116,184 @@ app.get('/api/projects/:project/file', async (req, res) => {
   } catch (err) {
     console.error('Error reading file', err)
     res.status(500).json({ error: 'Failed to read file' })
+  }
+})
+
+// GET /api/projects/:project/thoughts?path=relative/path -> LLM thoughts about file
+app.get('/api/projects/:project/thoughts', async (req, res) => {
+  try {
+    const { project } = req.params
+    const relPath = req.query.path
+    if (typeof relPath !== 'string' || !relPath) {
+      return res.status(400).json({ error: 'Missing or invalid path' })
+    }
+    
+    const root = resolveProjectRoot(project)
+    if (!root) return res.status(400).json({ error: 'Invalid project' })
+    
+    const fullPath = path.join(root, relPath)
+    const safeRel = path.relative(root, fullPath)
+    if (safeRel.startsWith('..') || path.isAbsolute(safeRel)) {
+      return res.status(400).json({ error: 'Invalid path' })
+    }
+    
+    const stat = await fs.promises.stat(fullPath).catch(() => null)
+    if (!stat || !stat.isFile()) {
+      return res.status(404).json({ error: 'File not found' })
+    }
+
+    // Construct the prompt for Warp SDK
+    const prompt = `Read the document at ${fullPath} and generate interesting insights, thoughts, or questions about it. Return your response as a JSON array where each element is an object with these fields: "type" (one of: "analysis", "suggestion", "question"), "content" (the thought text). Example format: [{"type": "analysis", "content": "The document shows..."}, {"type": "suggestion", "content": "Consider..."}, {"type": "question", "content": "How does..."}]`
+    
+    // Call Warp SDK
+    console.log('Calling Warp SDK for thoughts on:', relPath)
+    const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
+    
+    try {
+      const { stdout, stderr } = await execPromise(command, {
+        maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large responses
+      })
+      
+      if (stderr) {
+        console.warn('Warp SDK stderr:', stderr)
+      }
+
+      // Try to parse the response as JSON
+      let thoughts = []
+      try {
+        // The response might have extra text, try to extract JSON array
+        const jsonMatch = stdout.match(/\[.*\]/s)
+        if (jsonMatch) {
+          thoughts = JSON.parse(jsonMatch[0])
+        } else {
+          // Fallback: create a single thought from the response
+          thoughts = [{
+            type: 'analysis',
+            content: stdout.trim() || 'No insights generated'
+          }]
+        }
+      } catch (parseErr) {
+        console.error('Failed to parse Warp SDK response as JSON:', parseErr)
+        // Return the raw text as a single thought
+        thoughts = [{
+          type: 'analysis',
+          content: stdout.trim() || 'No insights generated'
+        }]
+      }
+      
+      // Add timestamps
+      const thoughtsWithTime = thoughts.map((thought, idx) => ({
+        ...thought,
+        id: idx + 1,
+        timestamp: new Date().toISOString()
+      }))
+      
+      res.json({ thoughts: thoughtsWithTime })
+    } catch (cmdErr) {
+      console.error('Error executing Warp SDK command:', cmdErr)
+      // Return fallback thoughts if Warp SDK fails
+      res.json({ 
+        thoughts: [
+          {
+            id: 1,
+            type: 'analysis',
+            content: 'Unable to generate AI insights at this time. Warp SDK might not be available.',
+            timestamp: new Date().toISOString()
+          }
+        ]
+      })
+    }
+  } catch (err) {
+    console.error('Error getting thoughts:', err)
+    res.status(500).json({ error: 'Failed to get thoughts' })
+  }
+})
+
+// GET /api/projects/:project/notes?path=relative/path -> LLM note cards about file
+app.get('/api/projects/:project/notes', async (req, res) => {
+  try {
+    const { project } = req.params
+    const relPath = req.query.path
+    if (typeof relPath !== 'string' || !relPath) {
+      return res.status(400).json({ error: 'Missing or invalid path' })
+    }
+    
+    const root = resolveProjectRoot(project)
+    if (!root) return res.status(400).json({ error: 'Invalid project' })
+    
+    const fullPath = path.join(root, relPath)
+    const safeRel = path.relative(root, fullPath)
+    if (safeRel.startsWith('..') || path.isAbsolute(safeRel)) {
+      return res.status(400).json({ error: 'Invalid path' })
+    }
+    
+    const stat = await fs.promises.stat(fullPath).catch(() => null)
+    if (!stat || !stat.isFile()) {
+      return res.status(404).json({ error: 'File not found' })
+    }
+
+    // Construct the prompt for Warp SDK to generate note cards
+    const prompt = `Read the document at ${fullPath} and generate important note cards about it. Each note should capture a key insight, important detail, or actionable item. Return your response as a JSON array where each element is an object with these fields: "title" (a short title for the note), "content" (the detailed note content). Generate 3-5 note cards. Example format: [{"title": "Key Architecture Decision", "content": "The system uses microservices..."}, {"title": "Performance Consideration", "content": "Caching is implemented at..."}]`
+    
+    // Call Warp SDK
+    console.log('Calling Warp SDK for note cards on:', relPath)
+    const command = `warp-dev agent run --prompt "${prompt.replace(/"/g, '\\"')}"`
+    
+    try {
+      const { stdout, stderr } = await execPromise(command, {
+        maxBuffer: 1024 * 1024 * 10 // 10MB buffer for large responses
+      })
+      
+      if (stderr) {
+        console.warn('Warp SDK stderr:', stderr)
+      }
+
+      // Try to parse the response as JSON
+      let notes = []
+      try {
+        // The response might have extra text, try to extract JSON array
+        const jsonMatch = stdout.match(/\[.*\]/s)
+        if (jsonMatch) {
+          notes = JSON.parse(jsonMatch[0])
+        } else {
+          // Fallback: create a single note from the response
+          notes = [{
+            title: 'Document Note',
+            content: stdout.trim() || 'No notes generated'
+          }]
+        }
+      } catch (parseErr) {
+        console.error('Failed to parse Warp SDK response as JSON:', parseErr)
+        // Return the raw text as a single note
+        notes = [{
+          title: 'Document Note',
+          content: stdout.trim() || 'No notes generated'
+        }]
+      }
+      
+      // Add IDs to notes
+      const notesWithIds = notes.map((note, idx) => ({
+        ...note,
+        id: idx + 1
+      }))
+      
+      res.json({ notes: notesWithIds })
+    } catch (cmdErr) {
+      console.error('Error executing Warp SDK command for notes:', cmdErr)
+      // Return fallback notes if Warp SDK fails
+      res.json({ 
+        notes: [
+          {
+            id: 1,
+            title: 'Unable to Generate Notes',
+            content: 'AI note generation is currently unavailable. Warp SDK might not be accessible.'
+          }
+        ]
+      })
+    }
+  } catch (err) {
+    console.error('Error getting notes:', err)
+    res.status(500).json({ error: 'Failed to get notes' })
   }
 })
 

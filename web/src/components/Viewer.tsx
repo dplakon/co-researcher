@@ -5,6 +5,9 @@ import { ProjectPicker } from '@/components/ProjectPicker'
 import { FileTree, type FileNode } from '@/components/FileTree'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { NoteCards } from '@/components/NoteCards'
+import { ThoughtStream } from '@/components/ThoughtStream'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export default function Viewer() {
   const [projects, setProjects] = React.useState<string[]>([])
@@ -62,38 +65,57 @@ export default function Viewer() {
   }, [selected, selectedPath])
 
   return (
-    <div className="grid grid-cols-[280px_1fr] gap-4 h-screen p-4 overflow-hidden">
-      {/* Sidebar - sticky */}
-      <aside className="bg-muted/30 rounded-lg p-3 flex flex-col h-full overflow-hidden" data-name="sidebar">
-        <ProjectPicker projects={projects} value={selected} onChange={setSelected} />
-        <Separator className="my-3" />
-        <div className="text-sm text-muted-foreground mb-2">Files</div>
-        <ScrollArea className="flex-1">
-          {loading ? (
-            <div className="text-sm text-muted-foreground">Loading tree…</div>
-          ) : (
-            <FileTree root={tree} onSelectFile={setSelectedPath} selectedPath={selectedPath} />
-          )}
-        </ScrollArea>
-      </aside>
+    <div className="grid grid-cols-[280px_1fr_340px] gap-4 h-screen p-4 overflow-hidden">
+      {/* Left Sidebar - sticky */}
+      <Card className="h-full flex flex-col" data-name="sidebar">
+        <CardHeader className="pb-3">
+          <ProjectPicker projects={projects} value={selected} onChange={setSelected} />
+        </CardHeader>
+        <Separator />
+        <CardContent className="flex-1 flex flex-col pt-3 overflow-hidden">
+          <div className="text-sm font-medium mb-2">Files</div>
+          <ScrollArea className="flex-1">
+            {loading ? (
+              <div className="text-sm text-muted-foreground">Loading tree…</div>
+            ) : (
+              <FileTree root={tree} onSelectFile={setSelectedPath} selectedPath={selectedPath} />
+            )}
+          </ScrollArea>
+        </CardContent>
+      </Card>
 
       {/* Main content - scrollable */}
-      <main className="bg-muted/30 rounded-lg p-4 text-foreground overflow-y-auto h-full" data-name="document-body">
-        {!selected ? (
-          <div className="text-sm text-muted-foreground">Select a project to view files.</div>
-        ) : !selectedPath ? (
-          <div className="text-sm text-muted-foreground">Select a file to preview.</div>
-        ) : fileLoading ? (
-          <div className="text-sm text-muted-foreground">Loading file…</div>
-        ) : fileError ? (
-          <div className="text-sm text-red-600">{fileError}</div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="text-xs text-muted-foreground sticky top-0 bg-muted/30 pb-2">{selected}/{selectedPath}</div>
+      <Card className="h-full flex flex-col overflow-hidden" data-name="document-body">
+        <CardHeader className="pb-3 shrink-0">
+          <CardTitle className="text-sm font-medium">Document Viewer</CardTitle>
+          {selectedPath && (
+            <div className="text-xs text-muted-foreground">{selected}/{selectedPath}</div>
+          )}
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto text-foreground pb-3 min-h-0">
+          {!selected ? (
+            <div className="text-sm text-muted-foreground">Select a project to view files.</div>
+          ) : !selectedPath ? (
+            <div className="text-sm text-muted-foreground">Select a file to preview.</div>
+          ) : fileLoading ? (
+            <div className="text-sm text-muted-foreground">Loading file…</div>
+          ) : fileError ? (
+            <div className="text-sm text-red-600">{fileError}</div>
+          ) : (
             <pre className="text-sm whitespace-pre-wrap leading-6 font-mono">{fileContent}</pre>
-          </div>
-        )}
-      </main>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Right Sidebar - sticky */}
+      <aside className="flex flex-col gap-4 h-full overflow-hidden" data-name="right-sidebar">
+        <div className="h-60">
+          <NoteCards project={selected} filePath={selectedPath || undefined} />
+        </div>
+        <div className="flex-1 min-h-0">
+          <ThoughtStream project={selected} filePath={selectedPath || undefined} />
+        </div>
+      </aside>
     </div>
   )
 }
