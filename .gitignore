@@ -1,0 +1,22 @@
+# Node
+node_modules
+
+# Env
+.env
+.env.*
+
+# Next.js
+.next
+out
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+

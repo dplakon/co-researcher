@@ -1,0 +1,18 @@
+{
+  "name": "co-researcher",
+  "private": true,
+  "workspaces": [
+    "web",
+    "server"
+  ],
+  "scripts": {
+    "dev:web": "npm --prefix web run dev",
+    "dev:server": "npm --prefix server run dev",
+    "dev": "concurrently -n web,server -c blue,green \"npm --prefix web run dev\" \"npm --prefix server run dev\"",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
